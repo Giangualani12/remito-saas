@@ -1,77 +1,92 @@
-import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+export const runtime = "nodejs"; // importante
+export const dynamic = "force-dynamic"; // evita pre-render raro
 
 type Body = {
-  nombre: string
-  email: string
-  rol: 'admin' | 'chofer' | 'finanzas'
-  password?: string
+  nombre: string;
+  email: string;
+  rol: "admin" | "chofer" | "finanzas";
+  password?: string;
+};
+
+function getSupabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url) throw new Error("Falta NEXT_PUBLIC_SUPABASE_URL en Vercel");
+  if (!service) throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY en Vercel");
+
+  return createClient(url, service, {
+    auth: { persistSession: false },
+  });
 }
 
 function generarPasswordSimple(nombre: string) {
-  const clean = (nombre || 'User')
+  const clean = (nombre || "User")
     .trim()
-    .split(' ')[0]
+    .split(" ")[0]
     .slice(0, 10)
-    .replace(/[^a-zA-Z0-9]/g, '')
+    .replace(/[^a-zA-Z0-9]/g, "");
 
-  const year = new Date().getFullYear()
-  const n = Math.floor(Math.random() * 90) + 10
-  return `${clean}${year}!${n}`
+  const year = new Date().getFullYear();
+  const n = Math.floor(Math.random() * 90) + 10;
+  return `${clean}${year}${n}`;
 }
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as Body
+    const body = (await req.json()) as Body;
 
-    const nombre = (body.nombre ?? '').trim()
-    const email = (body.email ?? '').trim().toLowerCase()
-    const rol = (body.rol ?? 'chofer').toString().trim().toLowerCase() as Body['rol']
-    const password = (body.password ?? '').trim() || generarPasswordSimple(nombre)
-
-    if (!nombre || !email) {
-      return NextResponse.json({ error: 'Faltan datos (nombre/email)' }, { status: 400 })
+    if (!body?.email || !body?.nombre || !body?.rol) {
+      return NextResponse.json({ error: "Faltan datos" }, { status: 400 });
     }
 
-    // 1) Crear usuario en AUTH
-    const { data: created, error: eCreate } = await supabaseAdmin.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-    })
+    const supabaseAdmin = getSupabaseAdmin(); // ✅ adentro SIEMPRE
 
-    if (eCreate || !created.user) {
+    const password = body.password?.trim() || generarPasswordSimple(body.nombre);
+
+    // 1) crear usuario auth
+    const { data: created, error: errCreate } =
+      await supabaseAdmin.auth.admin.createUser({
+        email: body.email,
+        password,
+        email_confirm: true,
+      });
+
+    if (errCreate || !created?.user) {
       return NextResponse.json(
-        { error: eCreate?.message ?? 'Error creando auth user' },
-        { status: 400 }
-      )
+        { error: errCreate?.message || "Error creando usuario" },
+        { status: 500 }
+      );
     }
 
-    const userId = created.user.id
+    // 2) insertar perfil en tabla usuarios
+    const { error: errPerfil } = await supabaseAdmin.from("usuarios").insert({
+      id: created.user.id,
+      email: body.email,
+      nombre: body.nombre,
+      rol: body.rol,
+      activo: true,
+    });
 
-    // 2) Perfil (upsert por si trigger ya lo creó)
-    const { error: ePerfil } = await supabaseAdmin
-      .from('usuarios')
-      .upsert(
-        { id: userId, email, nombre, rol, activo: true },
-        { onConflict: 'id' }
-      )
-
-    if (ePerfil) {
-      await supabaseAdmin.auth.admin.deleteUser(userId)
-      return NextResponse.json({ error: ePerfil.message }, { status: 400 })
+    if (errPerfil) {
+      return NextResponse.json(
+        { error: errPerfil.message },
+        { status: 500 }
+      );
     }
 
-    return NextResponse.json({ ok: true, userId, password })
-  } catch (err: any) {
+    return NextResponse.json({
+      ok: true,
+      userId: created.user.id,
+      password_generada: password,
+    });
+  } catch (e: any) {
     return NextResponse.json(
-      { error: err?.message ?? 'Error inesperado' },
+      { error: e?.message || "Error inesperado" },
       { status: 500 }
-    )
+    );
   }
 }
