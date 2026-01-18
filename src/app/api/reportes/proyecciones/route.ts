@@ -1,14 +1,11 @@
-import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { NextResponse } from "next/server"
+import { createClient } from "@supabase/supabase-js"
 
-// Supabase admin (service role)
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
 
 type ViajeRow = {
-  estado: 'pendiente' | 'aprobado' | 'facturado' | 'pagado' | 'rechazado'
+  estado: "pendiente" | "aprobado" | "facturado" | "pagado" | "rechazado"
   valor_cliente_snapshot: number | null
   valor_chofer_snapshot: number | null
   creado_en: string
@@ -16,13 +13,25 @@ type ViajeRow = {
 
 export async function POST(req: Request) {
   try {
+    // ✅ crear client adentro (evita crash en build)
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const service = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+    if (!url || !service) {
+      return NextResponse.json({ error: "Faltan env en Vercel" }, { status: 500 })
+    }
+
+    const supabaseAdmin = createClient(url, service, {
+      auth: { persistSession: false },
+    })
+
     const { mes } = await req.json()
 
     if (!mes) {
-      return NextResponse.json({ error: 'Mes requerido (YYYY-MM)' }, { status: 400 })
+      return NextResponse.json({ error: "Mes requerido (YYYY-MM)" }, { status: 400 })
     }
 
-    const [y, m] = mes.split('-').map(Number)
+    const [y, m] = mes.split("-").map(Number)
 
     const desdeDate = new Date(y, m - 1, 1)
     const hastaDate = new Date(y, m, 0, 23, 59, 59, 999)
@@ -39,10 +48,10 @@ export async function POST(req: Request) {
     const diasTranscurridos = esMesActual ? Math.min(now.getDate(), diasDelMes) : diasDelMes
 
     const { data, error } = await supabaseAdmin
-      .from('viajes')
-      .select('estado, valor_cliente_snapshot, valor_chofer_snapshot, creado_en')
-      .gte('creado_en', desde)
-      .lte('creado_en', hasta)
+      .from("viajes")
+      .select("estado, valor_cliente_snapshot, valor_chofer_snapshot, creado_en")
+      .gte("creado_en", desde)
+      .lte("creado_en", hasta)
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 })
@@ -55,12 +64,12 @@ export async function POST(req: Request) {
 
     for (const v of rows) {
       // facturado = estados facturado o pagado, usando valor_cliente_snapshot
-      if ((v.estado === 'facturado' || v.estado === 'pagado') && v.valor_cliente_snapshot != null) {
+      if ((v.estado === "facturado" || v.estado === "pagado") && v.valor_cliente_snapshot != null) {
         facturadoActual += Number(v.valor_cliente_snapshot)
       }
 
       // costo/pagado = estado pagado usando valor_chofer_snapshot
-      if (v.estado === 'pagado' && v.valor_chofer_snapshot != null) {
+      if (v.estado === "pagado" && v.valor_chofer_snapshot != null) {
         pagadoActual += Number(v.valor_chofer_snapshot)
       }
     }
@@ -99,9 +108,6 @@ export async function POST(req: Request) {
       ganancia_proyectada: gananciaProy,
     })
   } catch {
-    return NextResponse.json(
-      { error: 'Error inesperado en proyecciones' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: "Error inesperado en proyecciones" }, { status: 500 })
   }
 }

@@ -1,14 +1,12 @@
-import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { NextResponse } from "next/server"
+import { createClient } from "@supabase/supabase-js"
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
 
 type ViajeRow = {
   cliente_id: string
-  estado: 'pendiente' | 'aprobado' | 'facturado' | 'pagado' | 'rechazado'
+  estado: "pendiente" | "aprobado" | "facturado" | "pagado" | "rechazado"
   valor_cliente_snapshot: number | null
   valor_chofer_snapshot: number | null
   clientes: { nombre: string } | { nombre: string }[] | null
@@ -23,18 +21,30 @@ type FilaInterna = {
 
 export async function POST(req: Request) {
   try {
+    // ✅ crear client adentro (evita crash en build)
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const service = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+    if (!url || !service) {
+      return NextResponse.json({ error: "Faltan env en Vercel" }, { status: 500 })
+    }
+
+    const supabaseAdmin = createClient(url, service, {
+      auth: { persistSession: false },
+    })
+
     const { mes } = await req.json()
 
     if (!mes) {
-      return NextResponse.json({ error: 'Mes requerido (YYYY-MM)' }, { status: 400 })
+      return NextResponse.json({ error: "Mes requerido (YYYY-MM)" }, { status: 400 })
     }
 
-    const [y, m] = mes.split('-').map(Number)
+    const [y, m] = mes.split("-").map(Number)
     const desde = new Date(Date.UTC(y, m - 1, 1)).toISOString()
     const hasta = new Date(Date.UTC(y, m, 1)).toISOString()
 
     const { data, error } = await supabaseAdmin
-      .from('viajes')
+      .from("viajes")
       .select(`
         cliente_id,
         estado,
@@ -42,8 +52,8 @@ export async function POST(req: Request) {
         valor_chofer_snapshot,
         clientes:cliente_id ( nombre )
       `)
-      .gte('creado_en', desde)
-      .lt('creado_en', hasta)
+      .gte("creado_en", desde)
+      .lt("creado_en", hasta)
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 })
@@ -68,19 +78,19 @@ export async function POST(req: Request) {
 
       // ✅ Facturado: cuando facturado o pagado
       if (
-        (v.estado === 'facturado' || v.estado === 'pagado') &&
+        (v.estado === "facturado" || v.estado === "pagado") &&
         v.valor_cliente_snapshot != null
       ) {
         resumen[key].facturado += v.valor_cliente_snapshot
       }
 
       // ✅ Pagado: solo cuando pagado
-      if (v.estado === 'pagado' && v.valor_chofer_snapshot != null) {
+      if (v.estado === "pagado" && v.valor_chofer_snapshot != null) {
         resumen[key].pagado += v.valor_chofer_snapshot
       }
     }
 
-    const resultado = Object.values(resumen).map(r => ({
+    const resultado = Object.values(resumen).map((r) => ({
       ...r,
       ganancia: r.facturado - r.pagado,
     }))
@@ -88,7 +98,7 @@ export async function POST(req: Request) {
     return NextResponse.json(resultado)
   } catch {
     return NextResponse.json(
-      { error: 'Error inesperado en reporte por cliente' },
+      { error: "Error inesperado en reporte por cliente" },
       { status: 500 }
     )
   }
