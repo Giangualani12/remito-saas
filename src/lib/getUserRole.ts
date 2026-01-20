@@ -1,10 +1,12 @@
-import { supabase } from "./supabase";
+import { getSupabaseClient } from "./supabase";
 
 type UsuarioRolRow = {
   rol: "admin" | "chofer" | "finanzas";
 };
 
 export async function getUserRole() {
+  const supabase = getSupabaseClient();
+
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -15,7 +17,7 @@ export async function getUserRole() {
     .from("usuarios")
     .select("rol")
     .eq("id", user.id)
-    .single<UsuarioRolRow>();
+    .maybeSingle<UsuarioRolRow>();
 
   if (error) return null;
 

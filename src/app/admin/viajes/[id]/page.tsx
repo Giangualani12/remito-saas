@@ -1,135 +1,206 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
+import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '@/lib/supabase'
 
 type EstadoViaje = 'pendiente' | 'aprobado' | 'facturado' | 'pagado' | 'rechazado'
 
-type ViajeRaw = {
-  id: string
+type ViajeDetalle = {
+  viaje_id: string
   estado: EstadoViaje
+
+  chofer_id: string | null
+  transportista_nombre: string | null
+  transportista_email: string | null
+
   origen: string | null
   destino: string | null
   tipo_unidad: string | null
-  creado_en: string
+
+  creado_en: string | null
+
+  // Chofer real (desde view)
+  chofer_real_id: string | null
+  chofer_real_nombre: string | null
+
+  // Remito (desde view)
+  numero_remito: string | null
+  fecha_viaje: string | null
+  archivo_url: string | null
+
+  // Cliente/Tarifa
   cliente_id: string | null
   tarifa_id: string | null
   valor_cliente_snapshot: number | null
   valor_chofer_snapshot: number | null
-  usuarios: any // puede venir objeto o array
-  remitos: any[] // array
 }
 
-type Viaje = {
+type Cliente = {
   id: string
-  estado: EstadoViaje
-  origen: string | null
-  destino: string | null
-  tipo_unidad: string | null
-  creado_en: string
-  cliente_id: string | null
-  tarifa_id: string | null
-  valor_cliente_snapshot: number | null
-  valor_chofer_snapshot: number | null
-  chofer_nombre: string | null
-  remito_numero: string | null
-  remito_archivo_url: string | null
-  remito_fecha: string | null
+  nombre: string
 }
-
-type Cliente = { id: string; nombre: string }
 
 type Tarifa = {
   id: string
+  cliente_id: string | null
   origen: string | null
   destino: string | null
-  tipo_unidad: string
+  tipo_unidad: string | null
   valor_cliente: number
   valor_chofer: number
 }
 
-function EstadoBadge({ estado }: { estado: EstadoViaje }) {
-  const map: Record<EstadoViaje, string> = {
-    pendiente: 'bg-yellow-100 text-yellow-800',
-    aprobado: 'bg-blue-100 text-blue-800',
-    facturado: 'bg-purple-100 text-purple-800',
-    pagado: 'bg-green-100 text-green-800',
-    rechazado: 'bg-red-100 text-red-800',
-  }
-  return <span className={`px-2 py-1 rounded text-xs font-medium ${map[estado]}`}>{estado}</span>
+type ChoferReal = {
+  id: string
+  nombre: string
+  transportista_id: string
+  activo: boolean
 }
 
-function normalizeViaje(data: ViajeRaw): Viaje {
-  const u = Array.isArray(data.usuarios) ? data.usuarios[0] : data.usuarios
-  const r = Array.isArray(data.remitos) ? data.remitos[0] : null
-
-  return {
-    id: data.id,
-    estado: data.estado,
-    origen: data.origen ?? null,
-    destino: data.destino ?? null,
-    tipo_unidad: data.tipo_unidad ?? null,
-    creado_en: data.creado_en,
-    cliente_id: data.cliente_id ?? null,
-    tarifa_id: data.tarifa_id ?? null,
-    valor_cliente_snapshot: data.valor_cliente_snapshot ?? null,
-    valor_chofer_snapshot: data.valor_chofer_snapshot ?? null,
-    chofer_nombre: u?.nombre ?? null,
-    remito_numero: r?.numero_remito ?? null,
-    remito_archivo_url: r?.archivo_url ?? null,
-    remito_fecha: r?.fecha_viaje ?? null,
+function Badge({ estado }: { estado: EstadoViaje }) {
+  const map: Record<EstadoViaje, string> = {
+    pendiente: 'bg-yellow-100 text-yellow-800 border-yellow-200',
+    aprobado: 'bg-blue-100 text-blue-800 border-blue-200',
+    facturado: 'bg-purple-100 text-purple-800 border-purple-200',
+    pagado: 'bg-green-100 text-green-800 border-green-200',
+    rechazado: 'bg-red-100 text-red-800 border-red-200',
   }
+
+  return (
+    <span className={`px-3 py-1 rounded-full text-xs font-medium border ${map[estado]}`}>
+      {estado}
+    </span>
+  )
+}
+
+function Card({
+  title,
+  subtitle,
+  right,
+  children,
+}: {
+  title: string
+  subtitle?: string
+  right?: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <motion.div
+      layout
+      className="bg-white border rounded-2xl p-5 shadow-sm"
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+    >
+      <div className="flex items-start justify-between gap-4 mb-3">
+        <div>
+          <div className="text-base font-semibold">{title}</div>
+          {subtitle && <div className="text-xs text-gray-500 mt-0.5">{subtitle}</div>}
+        </div>
+        {right}
+      </div>
+      {children}
+    </motion.div>
+  )
 }
 
 export default function AdminViajeDetallePage() {
-  const { id } = useParams()
-  const viajeId = id as string
+  const params = useParams<{ id: string }>()
+  const viajeId = params.id
 
-  const [viaje, setViaje] = useState<Viaje | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  const [viaje, setViaje] = useState<ViajeDetalle | null>(null)
+
   const [clientes, setClientes] = useState<Cliente[]>([])
   const [tarifas, setTarifas] = useState<Tarifa[]>([])
-  const [loading, setLoading] = useState(true)
+
+  const [choferesReales, setChoferesReales] = useState<ChoferReal[]>([])
+  const [choferRealSelected, setChoferRealSelected] = useState<string>('')
+
+  const [clienteSelected, setClienteSelected] = useState<string>('')
 
   const load = async () => {
     setLoading(true)
 
-    const { data, error } = await supabase
-      .from('viajes')
+    // ✅ 1) Viaje (de la view)
+    const { data: vData, error: vErr } = await supabase
+      .from('viajes_listado')
       .select(
         `
-        id,
+        viaje_id,
         estado,
         origen,
         destino,
         tipo_unidad,
         creado_en,
+        chofer_id,
+        transportista_nombre,
+        transportista_email,
+
+        chofer_real_id,
+        chofer_real_nombre,
+
+        numero_remito,
+        fecha_viaje,
+        archivo_url,
+
         cliente_id,
         tarifa_id,
         valor_cliente_snapshot,
-        valor_chofer_snapshot,
-        usuarios:chofer_id ( nombre ),
-        remitos ( numero_remito, archivo_url, fecha_viaje )
+        valor_chofer_snapshot
       `
       )
-      .eq('id', viajeId)
+      .eq('viaje_id', viajeId)
       .single()
 
-    if (error) {
-      alert(error.message)
+    if (vErr) {
+      alert(vErr.message)
+      setViaje(null)
       setLoading(false)
       return
     }
 
-    setViaje(normalizeViaje(data as ViajeRaw))
+    const vv = vData as ViajeDetalle
+    setViaje(vv)
 
-    const { data: clientesData, error: e2 } = await supabase
-      .from('clientes')
-      .select('id, nombre')
-      .order('nombre')
+    // ✅ estados iniciales
+    setClienteSelected(vv.cliente_id ?? '')
+    setChoferRealSelected(vv.chofer_real_id ?? '')
 
-    if (e2) alert(e2.message)
-    setClientes((clientesData ?? []) as Cliente[])
+    // ✅ 2) Clientes
+    const { data: cData } = await supabase.from('clientes').select('id, nombre').order('creado_en', { ascending: false })
+    setClientes((cData ?? []) as Cliente[])
+
+    // ✅ 3) Choferes reales (por transportista dueño del viaje)
+    if (vv.chofer_id) {
+      const { data: crData } = await supabase
+        .from('choferes_transportista')
+        .select('id, nombre, transportista_id, activo')
+        .eq('transportista_id', vv.chofer_id)
+        .eq('activo', true)
+        .order('creado_en', { ascending: false })
+
+      setChoferesReales((crData ?? []) as ChoferReal[])
+    } else {
+      setChoferesReales([])
+    }
+
+    // ✅ 4) Tarifas (si ya hay cliente o si elegimos uno después)
+    if (vv.cliente_id) {
+      const { data: tData } = await supabase
+        .from('tarifas')
+        .select('id, cliente_id, origen, destino, tipo_unidad, valor_cliente, valor_chofer')
+        .eq('cliente_id', vv.cliente_id)
+        .eq('vigente', true)
+        .order('creado_en', { ascending: false })
+
+      setTarifas((tData ?? []) as Tarifa[])
+    } else {
+      setTarifas([])
+    }
 
     setLoading(false)
   }
@@ -139,254 +210,396 @@ export default function AdminViajeDetallePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viajeId])
 
-  // tarifas por cliente
+  // ✅ cuando cambia cliente, recargar tarifas de ese cliente
   useEffect(() => {
-    if (!viaje?.cliente_id) {
-      setTarifas([])
-      return
+    const run = async () => {
+      if (!clienteSelected) {
+        setTarifas([])
+        return
+      }
+      const { data: tData, error } = await supabase
+        .from('tarifas')
+        .select('id, cliente_id, origen, destino, tipo_unidad, valor_cliente, valor_chofer')
+        .eq('cliente_id', clienteSelected)
+        .eq('vigente', true)
+        .order('creado_en', { ascending: false })
+
+      if (error) {
+        alert(error.message)
+        setTarifas([])
+        return
+      }
+      setTarifas((tData ?? []) as Tarifa[])
     }
+    run()
+  }, [clienteSelected])
 
-    supabase
-      .from('tarifas')
-      .select('id, origen, destino, tipo_unidad, valor_cliente, valor_chofer')
-      .eq('cliente_id', viaje.cliente_id)
-      .eq('vigente', true)
-      .order('creado_en', { ascending: false })
-      .then(({ data, error }) => {
-        if (error) alert(error.message)
-        setTarifas((data ?? []) as Tarifa[])
-      })
-  }, [viaje?.cliente_id])
+  const fechaCreado = useMemo(() => {
+    if (!viaje?.creado_en) return '-'
+    return new Date(viaje.creado_en).toLocaleString()
+  }, [viaje?.creado_en])
 
-  const verArchivo = async (archivo_url: string) => {
-    // si ya es URL completa, abrimos directo
-    if (/^https?:\/\//i.test(archivo_url)) {
-      window.open(archivo_url, '_blank')
-      return
-    }
+  const archivoOk = Boolean(viaje?.archivo_url)
 
-    // si es path del bucket
-    const { data, error } = await supabase.storage.from('remitos').createSignedUrl(archivo_url, 300)
-    if (error) {
-      alert(error.message)
-      return
-    }
-    window.open(data.signedUrl, '_blank')
-  }
+  const guardarChoferReal = async () => {
+    if (!viaje) return
 
-  const asignarCliente = async (clienteId: string) => {
+    setSaving(true)
     const { error } = await supabase
       .from('viajes')
-      .update({
-        cliente_id: clienteId || null,
-        tarifa_id: null,
-        valor_cliente_snapshot: null,
-        valor_chofer_snapshot: null,
-      })
-      .eq('id', viajeId)
+      .update({ chofer_real_id: choferRealSelected || null })
+      .eq('id', viaje.viaje_id)
 
-    if (error) {
-      alert(error.message)
-      return
-    }
+    setSaving(false)
 
-    setViaje(v =>
-      v
-        ? {
-            ...v,
-            cliente_id: clienteId || null,
-            tarifa_id: null,
-            valor_cliente_snapshot: null,
-            valor_chofer_snapshot: null,
-          }
-        : v
-    )
+    if (error) return alert(error.message)
+    await load()
   }
 
-  const asignarTarifa = async (t: Tarifa) => {
+  const guardarCliente = async () => {
+    if (!viaje) return
+
+    setSaving(true)
+    const { error } = await supabase
+      .from('viajes')
+      .update({ cliente_id: clienteSelected || null })
+      .eq('id', viaje.viaje_id)
+
+    setSaving(false)
+
+    if (error) return alert(error.message)
+    await load()
+  }
+
+  const aplicarTarifa = async (tarifaId: string) => {
+    if (!viaje) return
+
+    setSaving(true)
     const { error } = await supabase.rpc('aplicar_tarifa_a_viaje', {
-      p_viaje_id: viajeId,
-      p_tarifa_id: t.id,
+      p_viaje_id: viaje.viaje_id,
+      p_tarifa_id: tarifaId,
     })
+    setSaving(false)
 
-    if (error) {
-      alert(error.message)
-      return
-    }
+    if (error) return alert(error.message)
+    await load()
+  }
 
-    setViaje(v =>
-      v
-        ? {
-            ...v,
-            tarifa_id: t.id,
-            valor_cliente_snapshot: t.valor_cliente,
-            valor_chofer_snapshot: t.valor_chofer,
-          }
-        : v
+  const cambiarEstado = async (estado: EstadoViaje) => {
+    if (!viaje) return
+
+    setSaving(true)
+    const { error } = await supabase.rpc('cambiar_estado_viaje', {
+      p_viaje_id: viaje.viaje_id,
+      p_estado: estado,
+    })
+    setSaving(false)
+
+    if (error) return alert(error.message)
+    await load()
+  }
+
+  const marcarPagado = async () => {
+    if (!viaje) return
+
+    setSaving(true)
+    const { error } = await supabase.rpc('registrar_pago_transportista', {
+      p_viaje_id: viaje.viaje_id,
+    })
+    setSaving(false)
+
+    if (error) return alert(error.message)
+    await load()
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <div className="h-6 w-48 rounded bg-gray-100 animate-pulse" />
+        <div className="h-32 rounded-2xl bg-gray-100 animate-pulse" />
+        <div className="h-32 rounded-2xl bg-gray-100 animate-pulse" />
+        <div className="h-32 rounded-2xl bg-gray-100 animate-pulse" />
+      </div>
     )
   }
 
-  const cambiarEstado = async (nuevoEstado: EstadoViaje) => {
-    const { error } = await supabase.rpc('cambiar_estado_viaje', {
-      p_viaje_id: viajeId,
-      p_estado: nuevoEstado,
-    })
-
-    if (error) {
-      alert(error.message) // muestra el error real (permiso/validación)
-      return
-    }
-
-    setViaje(v => (v ? { ...v, estado: nuevoEstado } : v))
-  }
-
-  if (loading) return <div>Cargando…</div>
-  if (!viaje) return <div>Viaje no encontrado</div>
-
-  const puedeFacturar =
-    viaje.estado === 'aprobado' &&
-    viaje.cliente_id &&
-    viaje.valor_cliente_snapshot != null &&
-    viaje.valor_chofer_snapshot != null
-
-  const puedePagar = viaje.estado === 'facturado'
-  const puedeAprobar = viaje.estado === 'pendiente'
-  const puedeRechazar = viaje.estado === 'pendiente' || viaje.estado === 'aprobado'
+  if (!viaje) return <div className="text-sm text-gray-600">No se encontró el viaje.</div>
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <h1 className="text-2xl font-bold">Detalle del viaje</h1>
-        <button onClick={load} className="border rounded px-3 py-2 text-sm hover:bg-gray-50">
-          Actualizar
-        </button>
-      </div>
-
-      {/* INFO */}
-      <div className="bg-white border rounded p-4 space-y-2">
-        <div><b>Chofer:</b> {viaje.chofer_nombre ?? '-'}</div>
-        <div><b>Ruta:</b> {(viaje.origen ?? '-') + ' → ' + (viaje.destino ?? '-')}</div>
-        <div><b>Unidad:</b> {viaje.tipo_unidad ?? '-'}</div>
-        <div className="flex items-center gap-2">
-          <b>Estado:</b> <EstadoBadge estado={viaje.estado} />
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Detalle del viaje</h1>
+          <p className="text-sm text-gray-500">Gestión del viaje, remito, cliente, tarifa y estado</p>
         </div>
-        <div><b>Creado:</b> {new Date(viaje.creado_en).toLocaleString()}</div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={load}
+            className="border rounded-xl px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.98] transition"
+          >
+            Actualizar
+          </button>
+        </div>
       </div>
 
-      {/* REMITO */}
-      <div className="bg-white border rounded p-4">
-        <b>Remito</b>
+      {/* Top Card */}
+      <Card
+        title="Resumen"
+        subtitle={`ID: ${viaje.viaje_id}`}
+        right={<Badge estado={viaje.estado} />}
+      >
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Transportista */}
+          <div className="border rounded-2xl p-4">
+            <div className="text-xs text-gray-500">Transportista</div>
+            <div className="text-sm font-semibold mt-1">{viaje.transportista_nombre ?? '-'}</div>
+            <div className="text-xs text-gray-500">{viaje.transportista_email ?? '-'}</div>
 
-        {viaje.remito_numero ? (
-          <div className="mt-2 space-y-1">
-            <div className="text-sm">
-              <b>Número:</b> {viaje.remito_numero}
+            <div className="mt-3 border rounded-2xl p-3 bg-gray-50">
+              <div className="text-xs text-gray-500 mb-1">Chofer real</div>
+
+              <div className="flex items-center gap-2">
+                <select
+                  value={choferRealSelected}
+                  onChange={e => setChoferRealSelected(e.target.value)}
+                  className="flex-1 border rounded-xl p-2 text-sm bg-white"
+                >
+                  <option value="">— Sin chofer real —</option>
+                  {choferesReales.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.nombre}
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  disabled={saving}
+                  onClick={guardarChoferReal}
+                  className={`border rounded-xl px-3 py-2 text-sm transition active:scale-[0.98] ${
+                    saving ? 'opacity-60 cursor-not-allowed' : 'hover:bg-gray-50'
+                  }`}
+                >
+                  Guardar
+                </button>
+              </div>
+
+              <div className="text-xs text-gray-500 mt-2">
+                Actual: <span className="text-gray-700">{viaje.chofer_real_nombre ?? '—'}</span>
+              </div>
             </div>
-            <div className="text-sm text-gray-600">
-              {viaje.remito_fecha ? new Date(viaje.remito_fecha).toLocaleDateString() : ''}
+          </div>
+
+          {/* Ruta */}
+          <div className="border rounded-2xl p-4">
+            <div className="text-xs text-gray-500">Ruta</div>
+            <div className="text-sm font-semibold mt-1">
+              {(viaje.origen ?? 'General') + ' → ' + (viaje.destino ?? '-')}
             </div>
 
-            {viaje.remito_archivo_url ? (
+            <div className="mt-3 text-xs text-gray-500">Unidad</div>
+            <div className="text-sm font-medium">{viaje.tipo_unidad ?? '-'}</div>
+
+            <div className="mt-3 text-xs text-gray-500">Creado</div>
+            <div className="text-sm">{fechaCreado}</div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Remito */}
+      <Card title="Remito" subtitle="Datos del remito asociado al viaje" right={<span className="text-xs text-gray-400">{archivoOk ? 'Archivo disponible' : 'Sin archivo'}</span>}>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="border rounded-2xl p-3">
+            <div className="text-xs text-gray-500">Número</div>
+            <div className="text-sm font-semibold mt-1">{viaje.numero_remito ?? '—'}</div>
+          </div>
+
+          <div className="border rounded-2xl p-3">
+            <div className="text-xs text-gray-500">Fecha del viaje</div>
+            <div className="text-sm font-semibold mt-1">{viaje.fecha_viaje ?? '—'}</div>
+          </div>
+
+          <div className="border rounded-2xl p-3 flex items-center justify-between gap-2">
+            <div>
+              <div className="text-xs text-gray-500">Archivo</div>
+              <div className="text-sm font-semibold mt-1">
+                {archivoOk ? (
+                  <span className="text-green-700">Cargado ✅</span>
+                ) : (
+                  <span className="text-red-600">No cargado ❌</span>
+                )}
+              </div>
+            </div>
+
+            {archivoOk && (
               <button
-                onClick={() => verArchivo(viaje.remito_archivo_url!)}
-                className="text-blue-600 underline text-sm"
+                onClick={() => window.open(viaje.archivo_url!, '_blank')}
+                className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm hover:bg-blue-700 active:scale-[0.98] transition"
               >
-                Ver archivo
+                Ver remito
               </button>
-            ) : (
-              <div className="text-sm text-gray-500">Sin archivo</div>
             )}
           </div>
-        ) : (
-          <div className="text-sm text-gray-500 mt-1">Sin remito</div>
-        )}
-      </div>
+        </div>
+      </Card>
 
-      {/* CLIENTE */}
-      <div className="bg-white border rounded p-4">
-        <b>Cliente</b>
-        <select
-          value={viaje.cliente_id ?? ''}
-          onChange={e => asignarCliente(e.target.value)}
-          className="block mt-2 border rounded p-2 text-sm"
-        >
-          <option value="">Seleccionar cliente</option>
-          {clientes.map(c => (
-            <option key={c.id} value={c.id}>
-              {c.nombre}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* TARIFA */}
-      <div className="bg-white border rounded p-4">
-        <b>Tarifa</b>
-
-        {!viaje.cliente_id ? (
-          <div className="text-sm text-gray-500 mt-1">Seleccioná un cliente primero</div>
-        ) : tarifas.length === 0 ? (
-          <div className="text-sm text-gray-500 mt-1">No hay tarifas vigentes para este cliente</div>
-        ) : (
-          <div className="space-y-2 mt-2">
-            {tarifas.map(t => (
-              <button
-                key={t.id}
-                onClick={() => asignarTarifa(t)}
-                className="block w-full text-left border rounded p-2 text-sm hover:bg-gray-50"
-              >
-                {(t.origen ?? '-') + ' → ' + (t.destino ?? '-')}{' '}
-                · {t.tipo_unidad} — Cliente ${t.valor_cliente.toLocaleString()} / Chofer $
-                {t.valor_chofer.toLocaleString()}
-              </button>
+      {/* Cliente */}
+      <Card title="Cliente" subtitle="Seleccioná el cliente para poder asignar tarifas y facturar">
+        <div className="flex items-center gap-2">
+          <select
+            value={clienteSelected}
+            onChange={e => setClienteSelected(e.target.value)}
+            className="flex-1 border rounded-xl p-2 text-sm bg-white"
+          >
+            <option value="">Seleccionar cliente…</option>
+            {clientes.map(c => (
+              <option key={c.id} value={c.id}>
+                {c.nombre}
+              </option>
             ))}
+          </select>
+
+          <button
+            disabled={saving}
+            onClick={guardarCliente}
+            className={`border rounded-xl px-3 py-2 text-sm transition active:scale-[0.98] ${
+              saving ? 'opacity-60 cursor-not-allowed' : 'hover:bg-gray-50'
+            }`}
+          >
+            Guardar
+          </button>
+        </div>
+
+        <div className="text-xs text-gray-500 mt-2">
+          Tip: si tenés muchos clientes, no te preocupes: esto queda listo para facturar bien.
+        </div>
+      </Card>
+
+      {/* Tarifa */}
+      <Card
+        title="Tarifa"
+        subtitle={clienteSelected ? 'Elegí una tarifa vigente para ese cliente.' : 'Primero elegí un cliente.'}
+        right={
+          viaje.tarifa_id ? (
+            <span className="text-xs px-3 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
+              Tarifa seleccionada
+            </span>
+          ) : (
+            <span className="text-xs text-gray-400">Sin tarifa</span>
+          )
+        }
+      >
+        {!clienteSelected ? (
+          <div className="text-sm text-gray-600">Elegí un cliente arriba para ver tarifas.</div>
+        ) : tarifas.length === 0 ? (
+          <div className="text-sm text-gray-600">No hay tarifas vigentes para este cliente.</div>
+        ) : (
+          <div className="space-y-2">
+            {tarifas.map(t => {
+              const selected = viaje.tarifa_id === t.id
+              return (
+                <motion.div
+                  key={t.id}
+                  layout
+                  className={`border rounded-2xl p-4 flex items-center justify-between gap-3 transition ${
+                    selected ? 'border-blue-300 bg-blue-50/40' : 'hover:bg-gray-50'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="font-semibold text-sm">
+                      {(t.origen ?? 'General') + ' · ' + (t.tipo_unidad ?? '-')}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      Destino: <span className="text-gray-700">{t.destino ?? '-'}</span>
+                    </div>
+
+                    <div className="text-xs text-gray-500 mt-1">
+                      Cliente paga: <span className="text-gray-700">${t.valor_cliente}</span> · Transportista: <span className="text-gray-700">${t.valor_chofer}</span>
+                    </div>
+                  </div>
+
+                  <button
+                    disabled={saving}
+                    onClick={() => aplicarTarifa(t.id)}
+                    className={`px-4 py-2 rounded-xl text-sm transition active:scale-[0.98] ${
+                      selected
+                        ? 'bg-white border border-blue-200 text-blue-700'
+                        : 'bg-gray-100 hover:bg-gray-200 text-gray-800'
+                    }`}
+                  >
+                    Elegir
+                  </button>
+                </motion.div>
+              )
+            })}
           </div>
         )}
-      </div>
+      </Card>
 
-      {/* ACCIONES */}
-      <div className="bg-white border rounded p-4 space-y-2">
-        <b>Acciones</b>
-
-        <div className="flex gap-2 flex-wrap">
+      {/* Acciones */}
+      <Card title="Acciones" subtitle="Control de estados del viaje (admin)">
+        <div className="flex flex-wrap gap-2">
           <button
-            disabled={!puedeAprobar}
+            disabled={saving}
             onClick={() => cambiarEstado('aprobado')}
-            className="border px-3 py-2 rounded text-sm disabled:opacity-50"
+            className="px-4 py-2 rounded-xl text-sm bg-blue-600 text-white hover:bg-blue-700 active:scale-[0.98] transition"
           >
             Aprobar
           </button>
 
           <button
-            disabled={!puedeFacturar}
+            disabled={saving}
             onClick={() => cambiarEstado('facturado')}
-            className="bg-blue-600 text-white px-3 py-2 rounded text-sm disabled:opacity-50"
+            className="px-4 py-2 rounded-xl text-sm bg-purple-600 text-white hover:bg-purple-700 active:scale-[0.98] transition"
           >
             Facturar
           </button>
 
           <button
-            disabled={!puedePagar}
-            onClick={() => cambiarEstado('pagado')}
-            className="border px-3 py-2 rounded text-sm disabled:opacity-50"
+            disabled={saving}
+            onClick={marcarPagado}
+            className="px-4 py-2 rounded-xl text-sm bg-gray-900 text-white hover:bg-black active:scale-[0.98] transition"
           >
             Marcar pagado
           </button>
 
           <button
-            disabled={!puedeRechazar}
+            disabled={saving}
             onClick={() => cambiarEstado('rechazado')}
-            className="border px-3 py-2 rounded text-sm text-red-600 disabled:opacity-50"
+            className="px-4 py-2 rounded-xl text-sm bg-red-600 text-white hover:bg-red-700 active:scale-[0.98] transition"
           >
             Rechazar
           </button>
+
+          <AnimatePresence>
+            {saving && (
+              <motion.div
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 6 }}
+                className="ml-auto text-sm text-gray-500 flex items-center gap-2"
+              >
+                <span className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse" />
+                Guardando…
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
-        {!puedeFacturar && viaje.estado === 'aprobado' && (
-          <div className="text-xs text-red-600">Para facturar necesitás cliente y tarifa.</div>
-        )}
-      </div>
-    </div>
+        {/* Snapshots */}
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="border rounded-2xl p-3">
+            <div className="text-xs text-gray-500">Snapshot Cliente</div>
+            <div className="text-sm font-semibold mt-1">${viaje.valor_cliente_snapshot ?? '—'}</div>
+          </div>
+
+          <div className="border rounded-2xl p-3">
+            <div className="text-xs text-gray-500">Snapshot Transportista</div>
+            <div className="text-sm font-semibold mt-1">${viaje.valor_chofer_snapshot ?? '—'}</div>
+          </div>
+        </div>
+      </Card>
+    </motion.div>
   )
 }
-

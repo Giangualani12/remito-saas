@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '@/lib/supabase'
 
 type EstadoViaje = 'pendiente' | 'aprobado' | 'facturado' | 'pagado' | 'rechazado'
@@ -10,19 +11,13 @@ type ViajeRow = {
   viaje_id: string
   estado: EstadoViaje
 
-  // remito
-  numero_remito: string | null
-  fecha_viaje: string | null
+  transportista_nombre: string | null
 
-  // chofer
-  chofer_nombre: string | null
-
-  // ruta
-  origen: string | null
   destino: string | null
-
-  // unidad
   tipo_unidad: string | null
+
+  fecha_viaje: string | null
+  numero_remito: string | null
 }
 
 const ESTADOS = ['todos', 'pendiente', 'aprobado', 'facturado', 'pagado', 'rechazado'] as const
@@ -37,9 +32,22 @@ function EstadoBadge({ estado }: { estado: EstadoViaje }) {
   }
 
   return (
-    <span className={`px-2 py-1 rounded text-xs font-medium ${map[estado]}`}>
+    <span className={`px-2 py-1 rounded-lg text-xs font-medium inline-flex items-center gap-1 ${map[estado]}`}>
+      <span className="w-1.5 h-1.5 rounded-full bg-current opacity-60" />
       {estado}
     </span>
+  )
+}
+
+function SkeletonRow() {
+  return (
+    <tr className="border-b last:border-b-0">
+      {Array.from({ length: 7 }).map((_, i) => (
+        <td key={i} className="p-3">
+          <div className="h-4 w-full rounded bg-gray-100 animate-pulse" />
+        </td>
+      ))}
+    </tr>
   )
 }
 
@@ -47,45 +55,31 @@ export default function AdminViajesPage() {
   const [rows, setRows] = useState<ViajeRow[]>([])
   const [loading, setLoading] = useState(true)
 
-  // filtros
   const [estado, setEstado] = useState<(typeof ESTADOS)[number]>('todos')
-  const [qRemito, setQRemito] = useState('')
-  const [qChofer, setQChofer] = useState('')
-  const [desde, setDesde] = useState('')
-  const [hasta, setHasta] = useState('')
+  const [qTrans, setQTrans] = useState('')
+  const [qDestino, setQDestino] = useState('')
 
   const load = async () => {
     setLoading(true)
 
-    // ✅ OJO: view
     let query = supabase
       .from('viajes_listado')
       .select(
         `
         viaje_id,
         estado,
-        numero_remito,
-        fecha_viaje,
-        chofer_nombre,
-        origen,
+        transportista_nombre,
         destino,
-        tipo_unidad
+        tipo_unidad,
+        fecha_viaje,
+        numero_remito
       `
       )
       .order('fecha_viaje', { ascending: false, nullsFirst: false })
 
-    // estado
     if (estado !== 'todos') query = query.eq('estado', estado)
-
-    // buscar remito
-    if (qRemito.trim()) query = query.ilike('numero_remito', `%${qRemito.trim()}%`)
-
-    // buscar chofer
-    if (qChofer.trim()) query = query.ilike('chofer_nombre', `%${qChofer.trim()}%`)
-
-    // fechas
-    if (desde) query = query.gte('fecha_viaje', desde)
-    if (hasta) query = query.lte('fecha_viaje', hasta)
+    if (qTrans.trim()) query = query.ilike('transportista_nombre', `%${qTrans.trim()}%`)
+    if (qDestino.trim()) query = query.ilike('destino', `%${qDestino.trim()}%`)
 
     const { data, error } = await query
 
@@ -105,16 +99,19 @@ export default function AdminViajesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // si querés auto-refresco por filtros, descomentá:
   useEffect(() => {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [estado, qRemito, qChofer, desde, hasta])
+  }, [estado, qTrans, qDestino])
 
   const total = useMemo(() => rows.length, [rows])
 
   return (
-    <div className="space-y-6">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="space-y-6"
+    >
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -127,7 +124,7 @@ export default function AdminViajesPage() {
           <select
             value={estado}
             onChange={e => setEstado(e.target.value as any)}
-            className="border rounded p-2 text-sm"
+            className="border rounded-xl p-2 text-sm bg-white hover:bg-gray-50 transition"
           >
             {ESTADOS.map(s => (
               <option key={s} value={s}>
@@ -138,119 +135,116 @@ export default function AdminViajesPage() {
 
           <button
             onClick={load}
-            className="border rounded px-3 py-2 text-sm hover:bg-gray-50"
+            className="border rounded-xl px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.98] transition"
           >
             Actualizar
           </button>
         </div>
       </div>
 
-      {/* Filtros */}
-      <div className="bg-white border rounded p-4 space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+      {/* Filters */}
+      <motion.div
+        layout
+        className="bg-white border rounded-2xl p-4 space-y-3 shadow-sm"
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           <input
-            className="border rounded p-2 text-sm"
-            placeholder="Buscar remito…"
-            value={qRemito}
-            onChange={e => setQRemito(e.target.value)}
+            className="border rounded-xl p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 transition"
+            placeholder="Buscar transportista…"
+            value={qTrans}
+            onChange={e => setQTrans(e.target.value)}
           />
 
           <input
-            className="border rounded p-2 text-sm"
-            placeholder="Buscar chofer…"
-            value={qChofer}
-            onChange={e => setQChofer(e.target.value)}
-          />
-
-          <input
-            type="date"
-            className="border rounded p-2 text-sm"
-            value={desde}
-            onChange={e => setDesde(e.target.value)}
-          />
-
-          <input
-            type="date"
-            className="border rounded p-2 text-sm"
-            value={hasta}
-            onChange={e => setHasta(e.target.value)}
+            className="border rounded-xl p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 transition"
+            placeholder="Buscar destino…"
+            value={qDestino}
+            onChange={e => setQDestino(e.target.value)}
           />
         </div>
 
         <button
           onClick={() => {
             setEstado('todos')
-            setQRemito('')
-            setQChofer('')
-            setDesde('')
-            setHasta('')
+            setQTrans('')
+            setQDestino('')
           }}
-          className="border rounded px-3 py-2 text-sm hover:bg-gray-50"
+          className="border rounded-xl px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.98] transition"
         >
           Limpiar filtros
         </button>
-      </div>
+      </motion.div>
 
-      {/* Tabla */}
-      <div className="bg-white border rounded overflow-hidden">
+      {/* Table */}
+      <div className="bg-white border rounded-2xl overflow-hidden shadow-sm">
         {loading ? (
-          <div className="p-4 text-sm">Cargando…</div>
-        ) : rows.length === 0 ? (
-          <div className="p-4 text-sm text-gray-600">
-            No hay viajes para esos filtros.
+          <div className="p-4">
+            <div className="text-sm mb-3 text-gray-500">Cargando…</div>
+            <table className="w-full text-sm">
+              <tbody>
+                <SkeletonRow />
+                <SkeletonRow />
+                <SkeletonRow />
+              </tbody>
+            </table>
           </div>
+        ) : rows.length === 0 ? (
+          <div className="p-6 text-sm text-gray-600">No hay viajes para esos filtros.</div>
         ) : (
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
               <tr>
                 <th className="text-left p-3">Estado</th>
-                <th className="text-left p-3">Remito</th>
-                <th className="text-left p-3">Chofer</th>
-                <th className="text-left p-3">Ruta</th>
+                <th className="text-left p-3">Transportista</th>
+                <th className="text-left p-3">Destino</th>
                 <th className="text-left p-3">Unidad</th>
+                <th className="text-left p-3">N° Remito</th>
                 <th className="text-left p-3">Fecha</th>
                 <th className="text-right p-3"></th>
               </tr>
             </thead>
 
             <tbody>
-              {rows.map(r => {
-                const ruta = `${r.origen ?? '-'} → ${r.destino ?? '-'}`
-                const fecha = r.fecha_viaje
-                  ? new Date(r.fecha_viaje).toLocaleDateString()
-                  : '-'
+              <AnimatePresence initial={false}>
+                {rows.map(r => {
+                  const fecha = r.fecha_viaje ? new Date(r.fecha_viaje).toLocaleDateString() : '-'
+                  const remito = r.numero_remito ?? '—'
 
-                return (
-                  <tr key={r.viaje_id} className="border-b last:border-b-0">
-                    <td className="p-3">
-                      <EstadoBadge estado={r.estado} />
-                    </td>
+                  return (
+                    <motion.tr
+                      key={r.viaje_id}
+                      initial={{ opacity: 0, y: 4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }}
+                      transition={{ duration: 0.18 }}
+                      className="border-b last:border-b-0 hover:bg-gray-50/60 transition"
+                    >
+                      <td className="p-3">
+                        <EstadoBadge estado={r.estado} />
+                      </td>
 
-                    <td className="p-3">{r.numero_remito ?? '-'}</td>
+                      <td className="p-3 font-medium">{r.transportista_nombre ?? '-'}</td>
+                      <td className="p-3">{r.destino ?? '-'}</td>
+                      <td className="p-3">{r.tipo_unidad ?? '-'}</td>
+                      <td className="p-3">{remito}</td>
+                      <td className="p-3">{fecha}</td>
 
-                    <td className="p-3">{r.chofer_nombre ?? '-'}</td>
-
-                    <td className="p-3">{ruta}</td>
-
-                    <td className="p-3">{r.tipo_unidad ?? '-'}</td>
-
-                    <td className="p-3">{fecha}</td>
-
-                    <td className="p-3 text-right">
-                      <Link
-                        href={`/admin/viajes/${r.viaje_id}`}
-                        className="text-blue-600 underline"
-                      >
-                        Ver
-                      </Link>
-                    </td>
-                  </tr>
-                )
-              })}
+                      <td className="p-3 text-right">
+                        <Link
+                          href={`/admin/viajes/${r.viaje_id}`}
+                          className="text-blue-600 hover:text-blue-800 underline underline-offset-4"
+                        >
+                          Ver
+                        </Link>
+                      </td>
+                    </motion.tr>
+                  )
+                })}
+              </AnimatePresence>
             </tbody>
           </table>
         )}
       </div>
-    </div>
+    </motion.div>
   )
 }

@@ -9,6 +9,10 @@ type Cliente = {
   creado_en: string
 }
 
+function normalizarNombre(s: string) {
+  return s.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
 export default function AdminClientesPage() {
   const [clientes, setClientes] = useState<Cliente[]>([])
   const [nombre, setNombre] = useState('')
@@ -18,10 +22,11 @@ export default function AdminClientesPage() {
 
   const load = async () => {
     setLoading(true)
+
     const { data, error } = await supabase
       .from('clientes')
       .select('id, nombre, creado_en')
-      .order('nombre')
+      .order('nombre', { ascending: true })
 
     if (error) {
       alert(error.message)
@@ -44,12 +49,19 @@ export default function AdminClientesPage() {
       return
     }
 
+    // ✅ Anti duplicados (case-insensitive y espacios)
+    const existe = clientes.some(c => normalizarNombre(c.nombre) === normalizarNombre(n))
+    if (existe) {
+      alert('Ese cliente ya existe (o muy parecido). Buscalo en la lista 👍')
+      return
+    }
+
     setSaving(true)
 
     const { data, error } = await supabase
       .from('clientes')
       .insert({ nombre: n })
-      .select()
+      .select('id, nombre, creado_en')
       .single()
 
     if (error) {
@@ -58,15 +70,18 @@ export default function AdminClientesPage() {
       return
     }
 
-    setClientes(prev => [...prev, data as Cliente].sort((a, b) => a.nombre.localeCompare(b.nombre)))
+    setClientes(prev =>
+      [...prev, data as Cliente].sort((a, b) => a.nombre.localeCompare(b.nombre))
+    )
     setNombre('')
     setSaving(false)
   }
 
   const filtrados = useMemo(() => {
-    const q = busqueda.trim().toLowerCase()
+    const q = normalizarNombre(busqueda)
     if (!q) return clientes
-    return clientes.filter(c => c.nombre.toLowerCase().includes(q))
+
+    return clientes.filter(c => normalizarNombre(c.nombre).includes(q))
   }, [clientes, busqueda])
 
   return (
@@ -97,7 +112,9 @@ export default function AdminClientesPage() {
             </div>
             <div>
               <div className="font-semibold">Nuevo cliente</div>
-              <div className="text-xs text-gray-500">Creá una empresa para asignarla a viajes.</div>
+              <div className="text-xs text-gray-500">
+                Creá una empresa para asignarla a viajes.
+              </div>
             </div>
           </div>
 
@@ -129,11 +146,11 @@ export default function AdminClientesPage() {
         {/* Lista */}
         <div className="card overflow-hidden lg:col-span-2">
           <div className="p-4 border-b" style={{ borderColor: 'rgba(15,23,42,0.08)' }}>
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
               <div>
                 <div className="font-semibold">Listado</div>
                 <div className="text-xs text-gray-500">
-                  Total: {clientes.length}
+                  Mostrando {filtrados.length} de {clientes.length}
                 </div>
               </div>
 
@@ -166,7 +183,7 @@ export default function AdminClientesPage() {
                   <div>
                     <div className="font-medium">{c.nombre}</div>
                     <div className="text-xs text-gray-500">
-                      Creado: {new Date(c.creado_en).toLocaleDateString()}
+                      Creado: {new Date(c.creado_en).toLocaleDateString('es-AR')}
                     </div>
                   </div>
 

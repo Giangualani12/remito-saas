@@ -2,8 +2,16 @@
 
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { getSupabaseClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+
+type EstadoViaje = 'pendiente' | 'aprobado' | 'facturado' | 'pagado' | 'rechazado'
+
+type ViajeMini = {
+  estado: EstadoViaje
+  valor_cliente_snapshot: number | null
+  valor_chofer_snapshot: number | null
+}
 
 type Totales = {
   totalViajes: number
@@ -28,6 +36,7 @@ type Notificacion = {
 
 export default function AdminDashboardPage() {
   const router = useRouter()
+  const supabase = getSupabaseClient()
 
   const [data, setData] = useState<Totales | null>(null)
   const [loading, setLoading] = useState(true)
@@ -48,7 +57,7 @@ export default function AdminDashboardPage() {
       return
     }
 
-    const v = viajes ?? []
+    const v = (viajes ?? []) as ViajeMini[]
 
     const totales: Totales = {
       totalViajes: v.length,
@@ -93,7 +102,6 @@ export default function AdminDashboardPage() {
     await Promise.all([loadDashboard(), loadNotificaciones()])
   }
 
-  // opcional: marcar como leída
   const marcarLeida = async (id: string) => {
     setNotis(prev => prev.map(n => (n.id === id ? { ...n, leido: true } : n)))
 
@@ -110,7 +118,6 @@ export default function AdminDashboardPage() {
   useEffect(() => {
     actualizarTodo()
 
-    // refresh liviano (para que “aparezcan” cosas sin recargar)
     const t = setInterval(() => {
       loadDashboard()
       loadNotificaciones()
@@ -125,10 +132,7 @@ export default function AdminDashboardPage() {
     return data.totalFacturado - data.totalChoferes
   }, [data])
 
-  const notisNoLeidas = useMemo(
-    () => notis.filter(n => !n.leido).length,
-    [notis]
-  )
+  const notisNoLeidas = useMemo(() => notis.filter(n => !n.leido).length, [notis])
 
   if (loading || !data) {
     return <div className="p-6 text-sm text-gray-600">Cargando dashboard…</div>

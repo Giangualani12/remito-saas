@@ -13,22 +13,29 @@ export default function NuevoRemitoPage() {
 
   const [numeroRemito, setNumeroRemito] = useState('')
   const [fechaViaje, setFechaViaje] = useState('')
-  const [origen, setOrigen] = useState('')
   const [destino, setDestino] = useState('')
+  const [choferReal, setChoferReal] = useState('')
   const [tipoUnidad, setTipoUnidad] = useState<TipoUnidad>('chasis')
   const [file, setFile] = useState<File | null>(null)
 
   const [saving, setSaving] = useState(false)
 
   const subir = async () => {
-    if (!numeroRemito || !fechaViaje || !origen || !destino || !tipoUnidad || !file) {
+    if (!numeroRemito || !fechaViaje || !destino || !choferReal || !tipoUnidad || !file) {
       alert('Completá todo y seleccioná el archivo.')
+      return
+    }
+
+    // 🔥 Mini control de peso para evitar “memoria insuficiente” en celu
+    const maxMB = 8
+    if (file.size > maxMB * 1024 * 1024) {
+      alert(`El archivo pesa más de ${maxMB}MB. Mandalo como PDF o sacá foto en menor calidad.`)
       return
     }
 
     setSaving(true)
 
-    // 1) Usuario actual
+    // 1) usuario actual
     const { data: userRes, error: userErr } = await supabase.auth.getUser()
     if (userErr || !userRes.user) {
       alert('No estás logueado.')
@@ -37,14 +44,15 @@ export default function NuevoRemitoPage() {
     }
     const user = userRes.user
 
-    // 2) Crear viaje
+    // 2) crear viaje (origen fijo)
     const { data: viaje, error: eViaje } = await supabase
       .from('viajes')
       .insert({
-        chofer_id: user.id,
-        origen: origen.trim(),
+        chofer_id: user.id,                 // transportista
+        origen: 'Buenos Aires',            // fijo
         destino: destino.trim(),
         tipo_unidad: tipoUnidad,
+        chofer_nombre: choferReal.trim(),  // chofer real escrito
         estado: 'pendiente',
       })
       .select('id')
@@ -58,7 +66,7 @@ export default function NuevoRemitoPage() {
 
     const viajeId = viaje.id as string
 
-    // 3) Subir archivo a storage
+    // 3) subir archivo storage
     const ext = file.name.split('.').pop() || 'bin'
     const safeName = `${Date.now()}_${numeroRemito.replace(/\s+/g, '')}.${ext}`
     const path = `${user.id}/${viajeId}/${safeName}`
@@ -70,7 +78,7 @@ export default function NuevoRemitoPage() {
       return
     }
 
-    // 4) Insert remito
+    // 4) insertar remito
     const { error: eRem } = await supabase.from('remitos').insert({
       viaje_id: viajeId,
       archivo_url: path,
@@ -79,7 +87,6 @@ export default function NuevoRemitoPage() {
     })
 
     if (eRem) {
-      // cleanup: borrar archivo si falló el insert del remito
       await supabase.storage.from('remitos').remove([path])
       alert(eRem.message)
       setSaving(false)
@@ -95,20 +102,18 @@ export default function NuevoRemitoPage() {
       <ChoferHeader />
 
       <div className="max-w-md mx-auto p-4 space-y-4">
-        {/* Header */}
-        <div className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-5 fade-up">
+        <div className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-5">
           <h1 className="text-xl font-bold tracking-tight">Subir remito</h1>
           <p className="text-sm text-gray-600 mt-1">
-            Cargá el viaje con <b>Desde</b> y <b>Hasta</b>, unidad y el archivo.
+            Cargá remito + viaje (solo <b>destino</b>, unidad, chofer y archivo).
           </p>
         </div>
 
-        {/* Form */}
-        <div className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-5 space-y-4 fade-up">
+        <div className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-5 space-y-4">
           <div>
             <label className="text-sm font-medium">Número de remito</label>
             <input
-              className="mt-1 w-full rounded-xl px-3 py-2 text-sm bg-white shadow-sm ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              className="mt-1 w-full rounded-xl px-3 py-2 text-sm bg-white ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-200"
               value={numeroRemito}
               onChange={e => setNumeroRemito(e.target.value)}
               placeholder="Ej: 1234"
@@ -119,38 +124,36 @@ export default function NuevoRemitoPage() {
             <label className="text-sm font-medium">Fecha del viaje</label>
             <input
               type="date"
-              className="mt-1 w-full rounded-xl px-3 py-2 text-sm bg-white shadow-sm ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              className="mt-1 w-full rounded-xl px-3 py-2 text-sm bg-white ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-200"
               value={fechaViaje}
               onChange={e => setFechaViaje(e.target.value)}
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-sm font-medium">Desde (origen)</label>
-              <input
-                className="mt-1 w-full rounded-xl px-3 py-2 text-sm bg-white shadow-sm ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                value={origen}
-                onChange={e => setOrigen(e.target.value)}
-                placeholder="Ej: Rosario"
-              />
-            </div>
+          <div>
+            <label className="text-sm font-medium">Destino</label>
+            <input
+              className="mt-1 w-full rounded-xl px-3 py-2 text-sm bg-white ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              value={destino}
+              onChange={e => setDestino(e.target.value)}
+              placeholder="Ej: Rosario"
+            />
+          </div>
 
-            <div>
-              <label className="text-sm font-medium">Hasta (destino)</label>
-              <input
-                className="mt-1 w-full rounded-xl px-3 py-2 text-sm bg-white shadow-sm ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                value={destino}
-                onChange={e => setDestino(e.target.value)}
-                placeholder="Ej: Mar del Plata"
-              />
-            </div>
+          <div>
+            <label className="text-sm font-medium">Chofer (real)</label>
+            <input
+              className="mt-1 w-full rounded-xl px-3 py-2 text-sm bg-white ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              value={choferReal}
+              onChange={e => setChoferReal(e.target.value)}
+              placeholder="Ej: Juan Perez"
+            />
           </div>
 
           <div>
             <label className="text-sm font-medium">Tipo de unidad</label>
             <select
-              className="mt-1 w-full rounded-xl px-3 py-2 text-sm bg-white shadow-sm ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              className="mt-1 w-full rounded-xl px-3 py-2 text-sm bg-white ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-200"
               value={tipoUnidad}
               onChange={e => setTipoUnidad(e.target.value as TipoUnidad)}
             >
@@ -167,7 +170,6 @@ export default function NuevoRemitoPage() {
             <input
               type="file"
               accept="image/*,application/pdf"
-              capture="environment"
               className="mt-1 w-full text-sm"
               onChange={e => setFile(e.target.files?.[0] ?? null)}
             />
@@ -183,7 +185,7 @@ export default function NuevoRemitoPage() {
           </button>
 
           <div className="text-xs text-gray-500">
-            Tip: si el archivo pesa mucho, conviene sacar foto en “calidad media”.
+            Tip: si falla en el celu por memoria, usá PDF o bajá la calidad de la foto.
           </div>
         </div>
       </div>
