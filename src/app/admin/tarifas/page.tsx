@@ -3,62 +3,97 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 
+type Cliente = { id: string; nombre: string }
+
 type Tarifa = {
   id: string
+  cliente_id: string | null
   destino: string | null
-  valor_cliente: number | null
-  valor_chofer: number | null
-  vigente: boolean
-  creado_en: string
+  tipo_unidad: string | null
+  valor_cliente: number
+  valor_chofer: number
+  segundo_viaje_pct: number | null
+  activo: boolean
+  creado_en: string | null
 }
 
-function money(n: number | null | undefined) {
-  const v = Number(n ?? 0)
-  return `$${v.toLocaleString('es-AR')}`
+const UNIDADES = ['chasis', 'balancines', 'semis', 'camioneta'] as const
+
+function ars(n: number) {
+  return new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    maximumFractionDigits: 0,
+  }).format(n)
 }
 
-function Badge({
-  children,
-  tone = 'gray',
-}: {
-  children: React.ReactNode
-  tone?: 'green' | 'gray'
-}) {
-  const map: Record<string, string> = {
-    green: 'bg-green-50 text-green-700 ring-green-200',
-    gray: 'bg-gray-50 text-gray-700 ring-gray-200',
-  }
+function cls(...a: (string | false | null | undefined)[]) {
+  return a.filter(Boolean).join(' ')
+}
 
+function BadgeEstado({ activo }: { activo: boolean }) {
   return (
     <span
-      className={`inline-flex items-center px-2 py-1 text-xs font-medium rounded-full ring-1 ${map[tone]}`}
+      className={cls(
+        'text-xs px-2 py-1 rounded-full border font-medium',
+        activo ? 'bg-green-50 text-green-700 border-green-200' : 'bg-gray-50 text-gray-700 border-gray-200'
+      )}
     >
-      {children}
+      {activo ? 'Vigente' : 'Inactiva'}
     </span>
   )
 }
 
 export default function AdminTarifasPage() {
-  const [tarifas, setTarifas] = useState<Tarifa[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
-  // form (solo 3 campos)
+  const [clientes, setClientes] = useState<Cliente[]>([])
+  const [tarifas, setTarifas] = useState<Tarifa[]>([])
+
+  // Form
+  const [clienteId, setClienteId] = useState('')
   const [destino, setDestino] = useState('')
+  const [tipoUnidad, setTipoUnidad] = useState('')
   const [valorCliente, setValorCliente] = useState('')
   const [valorChofer, setValorChofer] = useState('')
+  const [segundoPct, setSegundoPct] = useState('')
 
-  // filtros
-  const [q, setQ] = useState('')
+  // Filters
   const [soloVigentes, setSoloVigentes] = useState(true)
+  const [q, setQ] = useState('')
 
   const load = async () => {
     setLoading(true)
 
-    const { data, error } = await supabase
+    const { data: c, error: ec } = await supabase
+      .from('clientes')
+      .select('id,nombre')
+      .order('nombre', { ascending: true })
+
+    if (!ec) setClientes((c ?? []) as Cliente[])
+
+    let query = supabase
       .from('tarifas')
-      .select('id, destino, valor_cliente, valor_chofer, vigente, creado_en')
+      .select(
+        `
+        id,
+        cliente_id,
+        destino,
+        tipo_unidad,
+        valor_cliente,
+        valor_chofer,
+        segundo_viaje_pct,
+        activo,
+        creado_en
+      `
+      )
+      .order('activo', { ascending: false })
       .order('creado_en', { ascending: false })
+
+    if (soloVigentes) query = query.eq('activo', true)
+
+    const { data, error } = await query
 
     if (error) {
       alert(error.message)
@@ -73,47 +108,49 @@ export default function AdminTarifasPage() {
 
   useEffect(() => {
     load()
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soloVigentes])
 
-  const filtradas = useMemo(() => {
-    const qq = q.trim().toLowerCase()
+  const tarifasFiltradas = useMemo(() => {
+    if (!q.trim()) return tarifas
+    const s = q.trim().toLowerCase()
 
     return tarifas.filter(t => {
-      if (soloVigentes && !t.vigente) return false
-      if (!qq) return true
+      const cli = clientes.find(c => c.id === t.cliente_id)?.nombre ?? 'General'
+      const dest = t.destino ?? 'General'
+      const uni = t.tipo_unidad ?? 'General'
 
-      const d = (t.destino ?? 'general').toLowerCase()
       return (
-        d.includes(qq) ||
-        String(t.valor_cliente ?? '').includes(qq) ||
-        String(t.valor_chofer ?? '').includes(qq)
+        cli.toLowerCase().includes(s) ||
+        dest.toLowerCase().includes(s) ||
+        uni.toLowerCase().includes(s) ||
+        String(t.valor_cliente).includes(s) ||
+        String(t.valor_chofer).includes(s) ||
+        String(t.segundo_viaje_pct ?? '').includes(s)
       )
     })
-  }, [tarifas, q, soloVigentes])
-
-  const total = useMemo(() => filtradas.length, [filtradas])
+  }, [q, tarifas, clientes])
 
   const crearTarifa = async () => {
     const vc = Number(valorCliente)
     const vch = Number(valorChofer)
 
-    if (!Number.isFinite(vc) || vc <= 0) return alert('Valor cliente inválido')
-    if (!Number.isFinite(vch) || vch < 0) return alert('Valor chofer inválido')
+    if (!vc || vc <= 0) return alert('Valor cliente inválido')
+    if (!vch || vch <= 0) return alert('Valor chofer inválido')
 
     setSaving(true)
 
-    const { data, error } = await supabase
-      .from('tarifas')
-      .insert({
-        destino: destino.trim() || null, // ✅ opcional (null = general)
-        tipo_unidad: null, // ✅ ya no se usa
-        cliente_id: null, // ✅ ya no se usa
-        valor_cliente: vc,
-        valor_chofer: vch,
-        vigente: true,
-      })
-      .select('id, destino, valor_cliente, valor_chofer, vigente, creado_en')
-      .single()
+    const payload: any = {
+      cliente_id: clienteId || null,
+      destino: destino.trim() ? destino.trim() : null,
+      tipo_unidad: tipoUnidad || null,
+      valor_cliente: vc,
+      valor_chofer: vch,
+      segundo_viaje_pct: segundoPct.trim() ? Number(segundoPct) : null,
+      activo: true,
+    }
+
+    const { error } = await supabase.from('tarifas').insert(payload)
 
     if (error) {
       alert(error.message)
@@ -121,120 +158,169 @@ export default function AdminTarifasPage() {
       return
     }
 
-    setTarifas(prev => [data as Tarifa, ...prev])
+    setClienteId('')
     setDestino('')
+    setTipoUnidad('')
     setValorCliente('')
     setValorChofer('')
+    setSegundoPct('')
+
+    await load()
     setSaving(false)
   }
 
-  const toggleVigente = async (t: Tarifa) => {
-    const next = !t.vigente
+  const toggleActiva = async (t: Tarifa) => {
+    const { error } = await supabase.from('tarifas').update({ activo: !t.activo }).eq('id', t.id)
 
-    const { error } = await supabase
-      .from('tarifas')
-      .update({ vigente: next })
-      .eq('id', t.id)
+    if (error) {
+      alert(error.message)
+      return
+    }
 
-    if (error) return alert(error.message)
+    await load()
+  }
 
-    setTarifas(prev =>
-      prev.map(x => (x.id === t.id ? { ...x, vigente: next } : x))
-    )
+  const limpiar = () => {
+    setQ('')
+    setSoloVigentes(true)
   }
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Tarifas</h1>
           <p className="text-sm text-gray-500">
-            Cargás destino (opcional) + valores (cliente / transportista)
+            Creá tarifas por <b>Cliente / Destino / Unidad</b>. Lo vacío se toma como “General”.
           </p>
-          <div className="text-xs text-gray-400 mt-1">
-            Total (según filtros): {total}
-          </div>
+          <div className="text-xs text-gray-400 mt-1">Total (según filtro): {tarifasFiltradas.length}</div>
         </div>
 
         <button
           onClick={load}
-          className="px-3 py-2 text-sm rounded-xl border bg-white hover:bg-gray-50 transition active:scale-[0.99]"
+          className="border rounded-xl px-4 py-2 text-sm hover:bg-gray-50 active:scale-[0.98] transition"
         >
           Actualizar
         </button>
       </div>
 
-      {/* Crear + Listado */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Crear */}
-        <div className="rounded-2xl border bg-white p-4 shadow-sm">
+        <div className="bg-white border rounded-2xl p-5 shadow-sm">
           <div className="flex items-center justify-between">
-            <div className="font-semibold">Nueva tarifa</div>
-            <Badge tone="green">Vigente</Badge>
+            <div>
+              <h2 className="text-lg font-semibold">Nueva tarifa</h2>
+              <p className="text-xs text-gray-500">Prioridad recomendada: Cliente+Destino+Unidad → Cliente+Destino → General</p>
+            </div>
+            <span className="text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+              Alta rápida
+            </span>
           </div>
 
           <div className="mt-4 space-y-3">
             <div>
-              <label className="text-sm font-medium">
-                Destino <span className="text-gray-400">(opcional)</span>
-              </label>
+              <label className="text-xs text-gray-500">Cliente (opcional)</label>
+              <select
+                value={clienteId}
+                onChange={e => setClienteId(e.target.value)}
+                className="w-full border rounded-xl p-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+              >
+                <option value="">General (sin cliente)</option>
+                {clientes.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.nombre}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-500">Destino (opcional)</label>
               <input
-                className="mt-1 w-full border rounded-xl p-2 text-sm"
-                placeholder="Ej: Rosario (o vacío = General)"
                 value={destino}
                 onChange={e => setDestino(e.target.value)}
+                placeholder="Ej: Rosario (vacío = General)"
+                className="w-full border rounded-xl p-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-gray-500">Tipo de unidad (opcional)</label>
+              <select
+                value={tipoUnidad}
+                onChange={e => setTipoUnidad(e.target.value)}
+                className="w-full border rounded-xl p-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+              >
+                <option value="">General (sin unidad)</option>
+                {UNIDADES.map(u => (
+                  <option key={u} value={u}>
+                    {u}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               <div>
-                <label className="text-sm font-medium">Valor cliente</label>
+                <label className="text-xs text-gray-500">Valor cliente</label>
                 <input
-                  className="mt-1 w-full border rounded-xl p-2 text-sm"
-                  inputMode="numeric"
-                  placeholder="Ej: 600000"
                   value={valorCliente}
                   onChange={e => setValorCliente(e.target.value)}
+                  placeholder="Ej: 600000"
+                  inputMode="numeric"
+                  className="w-full border rounded-xl p-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
                 />
               </div>
 
               <div>
-                <label className="text-sm font-medium">Valor chofer</label>
+                <label className="text-xs text-gray-500">Valor chofer</label>
                 <input
-                  className="mt-1 w-full border rounded-xl p-2 text-sm"
-                  inputMode="numeric"
-                  placeholder="Ej: 200000"
                   value={valorChofer}
                   onChange={e => setValorChofer(e.target.value)}
+                  placeholder="Ej: 200000"
+                  inputMode="numeric"
+                  className="w-full border rounded-xl p-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
                 />
               </div>
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-500">% Segundo viaje (opcional)</label>
+              <input
+                value={segundoPct}
+                onChange={e => setSegundoPct(e.target.value)}
+                placeholder="Ej: 10 (sumar 10%) o -10 (descuento)"
+                inputMode="numeric"
+                className="w-full border rounded-xl p-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Ejemplo: si ponés <b>10</b> → el 2° viaje suma +10%. Si ponés <b>-10</b> → descuenta 10%.
+              </p>
             </div>
 
             <button
               onClick={crearTarifa}
               disabled={saving}
-              className="w-full rounded-xl bg-blue-600 text-white py-2 text-sm font-medium hover:bg-blue-700 transition active:scale-[0.99] disabled:opacity-50"
+              className="w-full bg-blue-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-blue-700 active:scale-[0.98] transition disabled:opacity-60"
             >
-              {saving ? 'Guardando…' : 'Crear tarifa'}
+              {saving ? 'Creando…' : 'Crear tarifa'}
             </button>
-
-            <div className="text-xs text-gray-500">
-              Tip: si dejás destino vacío, es una tarifa <b>General</b>.
-            </div>
           </div>
         </div>
 
         {/* Listado */}
-        <div className="rounded-2xl border bg-white p-4 shadow-sm lg:col-span-2">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="font-semibold">Listado</div>
+        <div className="bg-white border rounded-2xl p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">Listado</h2>
+              <p className="text-xs text-gray-500">Buscá por cliente, destino, unidad o valores</p>
+            </div>
 
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-gray-600 flex items-center gap-2">
+            <div className="flex items-center gap-3">
+              <label className="text-sm flex items-center gap-2 select-none">
                 <input
                   type="checkbox"
-                  className="accent-blue-600"
                   checked={soloVigentes}
                   onChange={e => setSoloVigentes(e.target.checked)}
                 />
@@ -242,77 +328,83 @@ export default function AdminTarifasPage() {
               </label>
 
               <button
-                onClick={() => {
-                  setQ('')
-                  setSoloVigentes(true)
-                }}
-                className="px-3 py-2 text-sm rounded-xl border bg-white hover:bg-gray-50 transition active:scale-[0.99]"
+                onClick={limpiar}
+                className="border rounded-xl px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.98] transition"
               >
                 Limpiar
               </button>
             </div>
           </div>
 
-          <div className="mt-3">
-            <input
-              className="w-full border rounded-xl p-2 text-sm"
-              placeholder="Buscar por destino o valor…"
-              value={q}
-              onChange={e => setQ(e.target.value)}
-            />
-          </div>
+          <input
+            value={q}
+            onChange={e => setQ(e.target.value)}
+            className="w-full border rounded-xl p-3 text-sm mt-4 focus:outline-none focus:ring-2 focus:ring-blue-200"
+            placeholder="Buscar… (cliente, destino, unidad, valores)"
+          />
 
-          <div className="mt-4 overflow-hidden rounded-2xl border">
+          <div className="mt-4 border rounded-2xl overflow-hidden">
             {loading ? (
-              <div className="p-4 text-sm text-gray-600">Cargando tarifas…</div>
-            ) : filtradas.length === 0 ? (
-              <div className="p-4 text-sm text-gray-600">
-                No hay tarifas para esos filtros.
-              </div>
+              <div className="p-4 text-sm text-gray-600">Cargando…</div>
+            ) : tarifasFiltradas.length === 0 ? (
+              <div className="p-4 text-sm text-gray-600">No hay tarifas para ese filtro.</div>
             ) : (
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 text-gray-600">
-                  <tr className="border-b">
-                    <th className="text-left p-3 font-medium">Destino</th>
-                    <th className="text-left p-3 font-medium">Cliente $</th>
-                    <th className="text-left p-3 font-medium">Transportista  $</th>
-                    <th className="text-left p-3 font-medium">Estado</th>
-                    <th className="text-right p-3 font-medium">Acción</th>
-                  </tr>
-                </thead>
-
-                <tbody className="divide-y">
-                  {filtradas.map(t => (
-                    <tr key={t.id} className="hover:bg-gray-50 transition">
-                      <td className="p-3 font-medium">
-                        {t.destino ?? 'General'}
-                      </td>
-                      <td className="p-3">{money(t.valor_cliente)}</td>
-                      <td className="p-3">{money(t.valor_chofer)}</td>
-                      <td className="p-3">
-                        {t.vigente ? (
-                          <Badge tone="green">Vigente</Badge>
-                        ) : (
-                          <Badge tone="gray">Inactiva</Badge>
-                        )}
-                      </td>
-                      <td className="p-3 text-right">
-                        <button
-                          onClick={() => toggleVigente(t)}
-                          className="px-3 py-2 text-xs rounded-xl border bg-white hover:bg-gray-50 transition active:scale-[0.99]"
-                        >
-                          {t.vigente ? 'Desactivar' : 'Activar'}
-                        </button>
-                      </td>
+              <div className="overflow-auto">
+                <table className="w-full text-sm min-w-[900px]">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="text-left p-3">Cliente</th>
+                      <th className="text-left p-3">Destino</th>
+                      <th className="text-left p-3">Unidad</th>
+                      <th className="text-left p-3">Cliente $</th>
+                      <th className="text-left p-3">Chofer $</th>
+                      <th className="text-left p-3">% 2°</th>
+                      <th className="text-left p-3">Estado</th>
+                      <th className="text-right p-3">Acción</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+
+                  <tbody>
+                    {tarifasFiltradas.map(t => {
+                      const cli = clientes.find(c => c.id === t.cliente_id)?.nombre ?? 'General'
+                      const dest = t.destino ?? 'General'
+                      const uni = t.tipo_unidad ?? 'General'
+
+                      return (
+                        <tr
+                          key={t.id}
+                          className="border-b last:border-b-0 hover:bg-gray-50 transition"
+                        >
+                          <td className="p-3 font-medium">{cli}</td>
+                          <td className="p-3">{dest}</td>
+                          <td className="p-3">{uni}</td>
+                          <td className="p-3">{ars(t.valor_cliente)}</td>
+                          <td className="p-3">{ars(t.valor_chofer)}</td>
+                          <td className="p-3">{t.segundo_viaje_pct ?? '-'}</td>
+
+                          <td className="p-3">
+                            <BadgeEstado activo={t.activo} />
+                          </td>
+
+                          <td className="p-3 text-right">
+                            <button
+                              onClick={() => toggleActiva(t)}
+                              className="border rounded-xl px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.98] transition"
+                            >
+                              {t.activo ? 'Desactivar' : 'Activar'}
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
 
-          <div className="mt-3 text-xs text-gray-500">
-            Se muestran {filtradas.length} tarifa(s).
+          <div className="text-xs text-gray-400 mt-3">
+            Se muestran {tarifasFiltradas.length} tarifa(s).
           </div>
         </div>
       </div>
