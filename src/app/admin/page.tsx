@@ -243,6 +243,7 @@ export default function AdminDashboardPage() {
             >
               Crear tarifa
             </button>
+            
           </div>
         </div>
 

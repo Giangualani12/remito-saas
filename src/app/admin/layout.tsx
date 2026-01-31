@@ -68,6 +68,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       { href: '/admin/tarifas', label: 'Tarifas', icon: '💰' },
       { href: '/admin/pagos', label: 'Pagos', icon: '🧾' },
       { href: '/admin/reportes', label: 'Reportes', icon: '📈' },
+        { href: '/admin/exportar', label: 'Exportar', icon: '📤' },
       { href: '/admin/usuarios', label: 'Usuarios', icon: '👥' },
     ],
     []
