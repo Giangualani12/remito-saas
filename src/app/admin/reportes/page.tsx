@@ -23,16 +23,25 @@ type ReporteCliente = {
   cliente: string
   viajes: number
   facturado: number
-  pagado: number
+  pagado: number // 👈 EN TU API: "costo devengado" (lo llamamos pagado por compat)
   ganancia: number
+
+  // extras opcionales si existieran
+  costo_devengado?: number
+  pagado_real?: number
+  deuda?: number
+  ganancia_devengada?: number
 }
 
 type ReporteTransportista = {
-  chofer: string // lo llamamos transportista en UI
+  chofer: string
   viajes: number
-  facturado: number
+  facturado: number // 👈 EN TU API: "costo devengado" (lo llamamos facturado por compat)
   pagado: number
   deuda: number
+
+  // extra opcional
+  costo_devengado?: number
 }
 
 type Proyecciones = {
@@ -42,7 +51,7 @@ type Proyecciones = {
   es_mes_actual: boolean
 
   facturado_actual: number
-  pagado_actual: number
+  pagado_actual: number // 👈 EN TU API: costo devengado actual
   ganancia_actual: number
 
   facturado_promedio_diario: number
@@ -50,15 +59,18 @@ type Proyecciones = {
   ganancia_promedio_diario: number
 
   facturado_proyectado: number
-  pagado_proyectado: number
+  pagado_proyectado: number // 👈 EN TU API: costo devengado proyectado
   ganancia_proyectada: number
+
+  // extra opcional
+  pagado_real_actual?: number
 }
 
 type SerieDia = {
   day: number
   label: string
   facturado: number
-  costo: number
+  costo: number // 👈 EN TU API: costo devengado por día
   ganancia: number
 }
 
@@ -124,7 +136,7 @@ export default function AdminReportesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mes: mesActual }),
       })
-      const dataClientes = (await resClientes.json()) as ReporteCliente[]
+      const dataClientes = (await resClientes.json()) as any
       setClientes(Array.isArray(dataClientes) ? dataClientes : [])
 
       const resTransportistas = await fetch('/api/reportes/chofer', {
@@ -132,7 +144,7 @@ export default function AdminReportesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mes: mesActual }),
       })
-      const dataTransportistas = (await resTransportistas.json()) as ReporteTransportista[]
+      const dataTransportistas = (await resTransportistas.json()) as any
       setTransportistas(Array.isArray(dataTransportistas) ? dataTransportistas : [])
 
       const resProy = await fetch('/api/reportes/proyecciones', {
@@ -140,15 +152,15 @@ export default function AdminReportesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mes: mesActual }),
       })
-      const dataProy = (await resProy.json()) as Proyecciones
-      setProy(dataProy && !('error' in (dataProy as any)) ? dataProy : null)
+      const dataProy = (await resProy.json()) as any
+      setProy(dataProy && !('error' in dataProy) ? (dataProy as Proyecciones) : null)
 
       const resSerie = await fetch('/api/reportes/series', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mes: mesActual }),
       })
-      const dataSerie = (await resSerie.json()) as SerieDia[]
+      const dataSerie = (await resSerie.json()) as any
       setSerie(Array.isArray(dataSerie) ? dataSerie : [])
     } finally {
       setLoading(false)
@@ -161,11 +173,14 @@ export default function AdminReportesPage() {
   }, [mes])
 
   // =========================
-  // KPIs base (claros)
+  // KPIs base (CLAROS)
   // =========================
   const kpi = useMemo(() => {
     const facturado = clientes.reduce((acc, c) => acc + (c.facturado ?? 0), 0)
+
+    // 👇 en el endpoint clientes "pagado" ahora representa COSTO DEVENGADO del mes
     const costo = clientes.reduce((acc, c) => acc + (c.pagado ?? 0), 0)
+
     const viajes = clientes.reduce((acc, c) => acc + (c.viajes ?? 0), 0)
     const ganancia = facturado - costo
 
@@ -176,14 +191,14 @@ export default function AdminReportesPage() {
     const gananciaPromedio = kpi.viajes > 0 ? Math.round(kpi.ganancia / kpi.viajes) : 0
     const margen = kpi.facturado > 0 ? Math.round((kpi.ganancia / kpi.facturado) * 100) : 0
 
-    const topCliente = [...clientes].sort((a, b) => b.facturado - a.facturado)[0]
-    const topTransportista = [...transportistas].sort((a, b) => b.viajes - a.viajes)[0]
+    const topCliente = [...clientes].sort((a, b) => (b.facturado ?? 0) - (a.facturado ?? 0))[0]
+    const topTransportista = [...transportistas].sort((a, b) => (b.viajes ?? 0) - (a.viajes ?? 0))[0]
 
     return { gananciaPromedio, margen, topCliente, topTransportista }
   }, [clientes, transportistas, kpi])
 
   // =========================
-  // Charts (solo los útiles en modo normal)
+  // Charts (modo normal)
   // =========================
   const chartDona = useMemo(() => {
     return [
@@ -194,30 +209,36 @@ export default function AdminReportesPage() {
 
   const chartTopClientes = useMemo(() => {
     return [...clientes]
-      .sort((a, b) => b.facturado - a.facturado)
+      .sort((a, b) => (b.facturado ?? 0) - (a.facturado ?? 0))
       .slice(0, 7)
-      .map(c => ({ name: c.cliente, value: c.facturado }))
+      .map(c => ({ name: c.cliente, value: c.facturado ?? 0 }))
   }, [clientes])
 
   const chartTopTransportistas = useMemo(() => {
     return [...transportistas]
-      .sort((a, b) => b.viajes - a.viajes)
+      .sort((a, b) => (b.viajes ?? 0) - (a.viajes ?? 0))
       .slice(0, 7)
-      .map(t => ({ name: t.chofer, value: t.viajes }))
+      .map(t => ({ name: t.chofer, value: t.viajes ?? 0 }))
   }, [transportistas])
+
+  // yAxis sane para counts (sin 0.5/0.7)
+  const yMaxViajes = useMemo(() => {
+    const max = Math.max(0, ...chartTopTransportistas.map(x => x.value ?? 0))
+    return Math.max(1, Math.ceil(max))
+  }, [chartTopTransportistas])
 
   // =========================
   // Export (CSV - Excel friendly)
   // =========================
   const exportClientes = () => {
-    const headers = ['Cliente', 'Viajes', 'Facturado', 'Costo', 'Ganancia']
+    const headers = ['Cliente', 'Viajes', 'Facturado', 'Costo (devengado)', 'Ganancia (devengada)']
     const rows = clientes.map(c => [c.cliente, c.viajes, c.facturado, c.pagado, c.ganancia])
     const csv = buildCSV(headers, rows)
     downloadFile(`reporte_clientes_${mes}.csv`, csv)
   }
 
   const exportTransportistas = () => {
-    const headers = ['Transportista', 'Viajes', 'Facturado', 'Pagado', 'Deuda']
+    const headers = ['Transportista', 'Viajes', 'Costo devengado', 'Pagado', 'Deuda']
     const rows = transportistas.map(t => [t.chofer, t.viajes, t.facturado, t.pagado, t.deuda])
     const csv = buildCSV(headers, rows)
     downloadFile(`reporte_transportistas_${mes}.csv`, csv)
@@ -236,7 +257,7 @@ export default function AdminReportesPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Reportes</h1>
             <p className="text-sm text-gray-600 mt-1">
-              Resumen claro del mes: cuánto facturaste, cuánto debés pagar y cuánto ganaste.
+              Resumen del mes: cuánto facturaste, cuánto <b>debés pagar</b> (costo devengado) y cuánto ganaste.
             </p>
           </div>
 
@@ -279,7 +300,7 @@ export default function AdminReportesPage() {
         <KPI titulo="Viajes (mes)" valor={kpi.viajes} simple icon="📦" />
       </div>
 
-      {/* INSIGHTS (se entienden) */}
+      {/* INSIGHTS */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <MiniCard
           titulo="Ganancia promedio por viaje"
@@ -289,16 +310,12 @@ export default function AdminReportesPage() {
         <MiniCard
           titulo="Top cliente (facturación)"
           big={insight.topCliente?.cliente ?? '—'}
-          small={
-            insight.topCliente ? `Facturado: ${moneyARS(insight.topCliente.facturado)}` : 'Sin datos'
-          }
+          small={insight.topCliente ? `Facturado: ${moneyARS(insight.topCliente.facturado ?? 0)}` : 'Sin datos'}
         />
         <MiniCard
           titulo="Transportista con más viajes"
           big={insight.topTransportista?.chofer ?? '—'}
-          small={
-            insight.topTransportista ? `${insight.topTransportista.viajes} viaje(s)` : 'Sin datos'
-          }
+          small={insight.topTransportista ? `${insight.topTransportista.viajes ?? 0} viaje(s)` : 'Sin datos'}
         />
       </div>
 
@@ -312,18 +329,14 @@ export default function AdminReportesPage() {
         {loading ? (
           <SkeletonBlock />
         ) : !proy ? (
-          <div className="p-4 text-sm text-gray-500">
-            No hay datos de proyección para este período.
-          </div>
+          <div className="p-4 text-sm text-gray-500">No hay datos de proyección para este período.</div>
         ) : (
           <div className="p-4 space-y-4">
             <div className="text-xs text-gray-500 flex items-start gap-2">
               <AlertCircle className="w-4 h-4 mt-0.5" />
               <div>
                 {proy.es_mes_actual ? (
-                  <>
-                    Estimación según promedio diario ({proy.dias_transcurridos}/{proy.dias_del_mes} días).
-                  </>
+                  <>Estimación según promedio diario ({proy.dias_transcurridos}/{proy.dias_del_mes} días).</>
                 ) : (
                   <>Mes cerrado: proyección = actual.</>
                 )}
@@ -345,7 +358,7 @@ export default function AdminReportesPage() {
         )}
       </div>
 
-      {/* GRAFICOS (modo normal: solo 2) */}
+      {/* GRAFICOS (modo normal) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Dona */}
         <div className="rounded-2xl border bg-white shadow-sm overflow-hidden">
@@ -453,7 +466,13 @@ export default function AdminReportesPage() {
                   <BarChart data={chartTopTransportistas}>
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grisGrid} />
                     <XAxis dataKey="name" tick={{ fontSize: 11 }} stroke={COLORS.grisTick} />
-                    <YAxis tick={{ fontSize: 11 }} stroke={COLORS.grisTick} />
+                    <YAxis
+                      tick={{ fontSize: 11 }}
+                      stroke={COLORS.grisTick}
+                      allowDecimals={false}
+                      tickCount={Math.min(6, yMaxViajes + 1)}
+                      domain={[0, yMaxViajes]}
+                    />
                     <Tooltip />
                     <Bar dataKey="value" fill={COLORS.violeta} radius={[10, 10, 0, 0]} />
                   </BarChart>
@@ -637,7 +656,7 @@ function TablaTransportistas({
               <tr>
                 <th className="text-left p-3">Transportista</th>
                 <th className="text-right p-3">Viajes</th>
-                <th className="text-right p-3">Facturado</th>
+                <th className="text-right p-3">Costo devengado</th>
                 <th className="text-right p-3">Pagado</th>
                 <th className="text-right p-3">Deuda</th>
               </tr>

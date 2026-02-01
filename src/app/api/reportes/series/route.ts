@@ -5,55 +5,46 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 type ViajeDB = {
-  creado_en: string
+  fecha_viaje: string | null // YYYY-MM-DD
   estado: "pendiente" | "aprobado" | "facturado" | "pagado" | "rechazado"
   valor_cliente_snapshot: number | null
   valor_chofer_snapshot: number | null
 }
 
+function monthRange(mes: string) {
+  const [y, m] = mes.split("-").map(Number)
+  const desde = `${y}-${String(m).padStart(2, "0")}-01`
+  const nextY = m === 12 ? y + 1 : y
+  const nextM = m === 12 ? 1 : m + 1
+  const hasta = `${nextY}-${String(nextM).padStart(2, "0")}-01`
+  return { desde, hasta, y, m }
+}
+
 export async function POST(req: Request) {
   try {
-    // ✅ crear client adentro (evita crash en build)
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL
     const service = process.env.SUPABASE_SERVICE_ROLE_KEY
 
-    if (!url || !service) {
-      return NextResponse.json({ error: "Faltan env en Vercel" }, { status: 500 })
-    }
+    if (!url || !service) return NextResponse.json({ error: "Faltan env en Vercel" }, { status: 500 })
 
-    const supabaseAdmin = createClient(url, service, {
-      auth: { persistSession: false },
-    })
+    const supabaseAdmin = createClient(url, service, { auth: { persistSession: false } })
 
     const { mes } = await req.json()
+    if (!mes) return NextResponse.json({ error: "Mes requerido (YYYY-MM)" }, { status: 400 })
 
-    if (!mes) {
-      return NextResponse.json({ error: "Mes requerido (YYYY-MM)" }, { status: 400 })
-    }
-
-    const [y, m] = mes.split("-").map(Number)
-
-    const desdeDate = new Date(y, m - 1, 1)
-    const hastaDate = new Date(y, m, 0, 23, 59, 59, 999)
-
-    const desde = desdeDate.toISOString()
-    const hasta = hastaDate.toISOString()
+    const { desde, hasta, y, m } = monthRange(mes)
+    const diasDelMes = new Date(y, m, 0).getDate()
 
     const { data, error } = await supabaseAdmin
       .from("viajes")
-      .select("creado_en, estado, valor_cliente_snapshot, valor_chofer_snapshot")
-      .gte("creado_en", desde)
-      .lte("creado_en", hasta)
+      .select("fecha_viaje, estado, valor_cliente_snapshot, valor_chofer_snapshot")
+      .gte("fecha_viaje", desde)
+      .lt("fecha_viaje", hasta)
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 400 })
-    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 })
 
     const rows = (data ?? []) as ViajeDB[]
 
-    const diasDelMes = new Date(y, m, 0).getDate()
-
-    // base del mes: array día 1..N
     const base = Array.from({ length: diasDelMes }, (_, i) => ({
       day: i + 1,
       label: String(i + 1),
@@ -63,33 +54,32 @@ export async function POST(req: Request) {
     }))
 
     for (const v of rows) {
-      const d = new Date(v.creado_en)
-      const day = d.getDate()
-
+      if (!v.fecha_viaje) continue
+      const day = Number(String(v.fecha_viaje).slice(8, 10))
       const idx = day - 1
       if (idx < 0 || idx >= base.length) continue
 
-      // Facturado cuenta si estado facturado o pagado
-      if ((v.estado === "facturado" || v.estado === "pagado") && v.valor_cliente_snapshot != null) {
+      const esDevengado = v.estado === "facturado" || v.estado === "pagado"
+
+      if (esDevengado && v.valor_cliente_snapshot != null) {
         base[idx].facturado += Number(v.valor_cliente_snapshot)
       }
 
-      // Costo cuenta cuando pagado (porque es "plata que ya salió")
-      if (v.estado === "pagado" && v.valor_chofer_snapshot != null) {
+      // ✅ costo devengado (más útil que “solo pagado” para ver el mes real)
+      if (esDevengado && v.valor_chofer_snapshot != null) {
         base[idx].costo += Number(v.valor_chofer_snapshot)
       }
     }
 
-    // calcular ganancia por día
     for (const r of base) {
       r.ganancia = r.facturado - r.costo
+      r.facturado = Math.round(r.facturado)
+      r.costo = Math.round(r.costo)
+      r.ganancia = Math.round(r.ganancia)
     }
 
     return NextResponse.json(base)
   } catch {
-    return NextResponse.json(
-      { error: "Error inesperado en series diarias" },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: "Error inesperado en series diarias" }, { status: 500 })
   }
 }
